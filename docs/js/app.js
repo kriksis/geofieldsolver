@@ -11,6 +11,7 @@ const main = document.getElementById('main');
 let viewCleanup = null;
 let onPosition = null; // throttled redraw on GPS updates
 let onPositionNow = null; // immediate redraw for the first fix or a GPS error
+const compass = { wanted: true, granted: false }; // remembered between navigate views
 
 // ---------- data ----------
 
@@ -366,7 +367,8 @@ function renderNav(code, kind, idx) {
       <div class="compass"><div class="ring"><span class="n">N</span></div><div class="arrow" id="arrow">▲</div></div>
       <div class="nav-dist" id="nav-dist">Waiting for GPS…</div>
       <div class="muted" id="nav-sub"></div>
-      <button class="btn" id="compass-perm" hidden>Enable compass</button>
+      <button class="btn" id="compass-perm">Enable compass</button>
+      <div class="muted small" id="compass-msg"></div>
       <div class="actions">
         <a class="btn primary" href="${m.google}" target="_blank" rel="noopener">Google Maps</a>
         <a class="btn" href="${m.geo}">Maps app</a>
@@ -391,20 +393,55 @@ function renderNav(code, kind, idx) {
     else return;
     const sa = screen.orientation?.angle || 0;
     heading = (heading + sa) % 360;
+    clearTimeout(noData);
+    msg.textContent = '';
     draw();
   };
   const evt = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
-  const listen = () => window.addEventListener(evt, onOrient);
-  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    const btn = document.getElementById('compass-perm');
-    btn.hidden = false;
-    btn.onclick = async () => { if ((await DeviceOrientationEvent.requestPermission()) === 'granted') { listen(); btn.hidden = true; } };
-  } else listen();
+  const btn = document.getElementById('compass-perm');
+  const msg = document.getElementById('compass-msg');
+  const needsPermission = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+  let on = false;
+  let noData = null;
+  const setOn = (v, refused = false) => {
+    on = v;
+    btn.textContent = v ? 'Disable compass' : 'Enable compass';
+    clearTimeout(noData);
+    if (v) {
+      window.addEventListener(evt, onOrient);
+      noData = setTimeout(() => {
+        if (heading == null) msg.textContent = refused
+          ? 'Compass permission was refused — allow motion & orientation access for this site in the browser settings. Until then the arrow points from north.'
+          : 'No compass data from this device — the arrow points from north.';
+      }, 3000);
+    } else {
+      window.removeEventListener(evt, onOrient);
+      heading = null;
+      msg.textContent = '';
+      draw();
+    }
+  };
+  btn.onclick = async () => {
+    if (on) { compass.wanted = false; setOn(false); return; }
+    compass.wanted = true;
+    let refused = false;
+    if (needsPermission && !compass.granted) {
+      // Some browsers answer "denied" yet still send orientation events, so listen either way.
+      let r = 'denied';
+      try { r = await DeviceOrientationEvent.requestPermission(); } catch {}
+      compass.granted = r === 'granted';
+      refused = !compass.granted;
+    }
+    msg.textContent = '';
+    setOn(true, refused);
+  };
+  // iOS only lets a tap ask for the permission, so start off there until it has been granted once.
+  if (compass.wanted && (!needsPermission || compass.granted)) setOn(true);
   let lock = null;
   navigator.wakeLock?.request('screen').then((l) => { lock = l; }).catch(() => {});
   onPosition = draw;
   draw();
-  viewCleanup = () => { window.removeEventListener(evt, onOrient); lock?.release(); };
+  viewCleanup = () => { clearTimeout(noData); window.removeEventListener(evt, onOrient); lock?.release(); };
 }
 
 // ---------- import / settings ----------
