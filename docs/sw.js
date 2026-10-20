@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION when files change.
-const VERSION = 'gfs-v2';
+const VERSION = 'gfs-v3';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/store.js', 'js/formula.js', 'js/geo.js', 'js/text.js', 'js/dsl.js',

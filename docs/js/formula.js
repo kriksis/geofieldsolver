@@ -165,10 +165,11 @@ export function namesOf(variables = [], derived = []) {
   return sortNames(names);
 }
 
-// "STVXYZ" -> one digit each; "X1" or "Q" -> a single value.
+// "STVXYZ" -> one digit each; "X62X63X64" -> X62, X63, X64; "X1" or "Q" -> a single value.
 export function targetNames(target) {
   const t = target.trim();
   if (/^\p{L}\d*$/u.test(t)) return [t];
+  if (/^(\p{L}\d*)+$/u.test(t)) return t.match(/\p{L}\d*/gu);
   return [...t].filter(isLetter);
 }
 
