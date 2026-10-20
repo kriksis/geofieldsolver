@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Field Solver build</title>
+<style>body{font:14px system-ui;margin:20px;max-width:900px} pre{white-space:pre-wrap;background:#f3f3f3;padding:10px}</style>
+</head>
+<body>
+<h1>Build field-caches.json</h1>
+<p>Reads every Pocket Query in <code>data/pq/</code> (listed in <code>data/pq/index.json</code>) and <code>data/curation.txt</code>,
+writes <code>data/field-caches.json</code> (import this into the app) and <code>data/registry.json</code> (all GC codes reviewed).
+Run through <code>tools/serve.ps1</code>.</p>
+<button id="run">Build</button>
+<pre id="log"></pre>
+<script type="module">
+import { parseGpxFiles } from '../docs/js/gpx.js';
+import { analyze, CANDIDATE_TYPES } from '../docs/js/detect.js';
+import { parseDsl } from '../docs/js/dsl.js';
+import { splitLatLon, namesOf, targetNames, templateVars, parse, varsIn } from '../docs/js/formula.js';
+
+const log = (s) => { document.getElementById('log').textContent += s + '\n'; };
+
+function parseCuration(text) {
+  const out = new Map();
+  let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    if (raw.startsWith('#')) continue;
+    const m = raw.match(/^@@\s*(GC\w+)\s+(skip|ok|field)\s*$/);
+    if (m) { cur = { code: m[1], mode: m[2], note: '', lines: [] }; out.set(m[1], cur); continue; }
+    if (!cur) continue;
+    const n = raw.match(/^note:\s*(.*)$/);
+    const t = raw.match(/^tags:\s*(.*)$/);
+    if (n) cur.note = n[1].trim();
+    else if (t) cur.tags = t[1].split(/[,\s]+/).filter(Boolean);
+    else cur.lines.push(raw);
+  }
+  return out;
+}
+
+function applyPatch(a, lines, errors) {
+  const p = structuredClone(a);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    let m;
+    if ((m = line.match(/^drop\s+(\S+)$/))) p.variables = p.variables.filter((v) => v.name !== m[1]);
+    else if ((m = line.match(/^FINAL\s*:\s*(.*)$/i))) { const [latTpl, lonTpl] = splitLatLon(m[1]); p.final = { ...p.final, latTpl, lonTpl }; }
+    else if ((m = line.match(/^CHECK\s*:\s*(.+?)\s*=\s*(-?[\d.]+)\s*$/i))) (p.checks ||= []).push({ expr: m[1], value: Number(m[2]) });
+    else if ((m = line.match(/^PROJECT\s*:\s*(.+?)\s*;\s*(.+)$/i))) p.final = { ...p.final, bearing: m[1].trim(), distance: m[2].replace(/\s*m$/i, '').trim() };
+    else if ((m = line.match(/^(\p{L}[\p{L}\d]*)\s*=\s*(.+)$/u))) { p.derived = p.derived.filter((d) => d.target !== m[1]); p.derived.push({ target: m[1], expr: m[2].trim() }); const t = targetNames(m[1]); p.variables = p.variables.filter((v) => !t.includes(v.name)); }
+    else if ((m = line.match(/^(\p{L}\d*)(?:@(\d+))?\s*:\s*(.*)$/u))) {
+      const stage = m[2] ? Number(m[2]) - 1 : undefined;
+      let v = p.variables.find((x) => x.name === m[1]);
+      if (!v) { v = { name: m[1], question: '', stage: null }; p.variables.push(v); }
+      v.question = m[3];
+      if (stage !== undefined) v.stage = stage;
+    } else errors.push(`patch line not understood: ${line}`);
+  }
+  return p;
+}
+
+// Every letter in formulas must be an input or derived; flag anything else.
+function check(code, p) {
+  const problems = [];
+  const names = namesOf(p.variables, p.derived);
+  const known = new Set(names);
+  const unknown = (list) => list.filter((v) => !known.has(v));
+  for (const d of p.derived) {
+    try { const u = unknown([...varsIn(parse(d.expr, names))]); if (u.length) problems.push(`${d.target} = … uses unknown ${u.join(',')}`); }
+    catch (e) { problems.push(`${d.target} = ${d.expr}: ${e.message}`); }
+  }
+  for (const t of [...p.stages, p.final]) {
+    if (!t?.latTpl) continue;
+    const u = unknown([...templateVars(t.latTpl, names), ...templateVars(t.lonTpl, names)]);
+    if (u.length) problems.push(`formula uses unknown ${u.join(',')}`);
+    for (const e of [t.bearing, t.distance].filter(Boolean)) {
+      try { const v = unknown([...varsIn(parse(e, names))]); if (v.length) problems.push(`projection uses unknown ${v.join(',')}`); }
+      catch (err) { problems.push(`projection ${e}: ${err.message}`); }
+    }
+  }
+  for (const k of p.checks || []) {
+    try { const v = unknown([...varsIn(parse(k.expr, names))]); if (v.length) problems.push(`check uses unknown ${v.join(',')}`); }
+    catch (err) { problems.push(`check ${k.expr}: ${err.message}`); }
+  }
+  if (p.variables.some((v) => v.stage != null && !p.stages[v.stage])) problems.push('variable points at a missing stage');
+  return problems.map((x) => `${code}: ${x}`);
+}
+
+document.getElementById('run').onclick = async () => {
+  document.getElementById('log').textContent = '';
+  const index = await fetch('../data/pq/index.json').then((r) => r.json());
+  const texts = await Promise.all(index.map((f) => fetch('../data/pq/' + f).then((r) => r.text())));
+  const caches = parseGpxFiles(texts);
+  const curation = parseCuration(await fetch('../data/curation.txt', { cache: 'no-store' }).then((r) => r.text()));
+  let registry = {};
+  try { registry = await fetch('../data/registry.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : {})); } catch {}
+  log(`${caches.length} caches in ${index.length} file(s), ${curation.size} reviewed entries`);
+
+  const out = [];
+  const problems = [];
+  const today = new Date().toISOString().slice(0, 10);
+  let fieldCount = 0;
+  const unreviewed = [];
+  const newCodes = caches.filter((c) => !registry[c.code]).map((c) => c.code);
+  for (const c of caches) {
+    const cand = CANDIDATE_TYPES.includes(c.type);
+    if (!cand) { registry[c.code] ??= { status: 'not-puzzle', type: c.type, name: c.name, checked: today }; continue; }
+    const a = analyze(c);
+    const cur = curation.get(c.code);
+    let rec;
+    if (!cur) {
+      rec = { ...c, ...a };
+      unreviewed.push(c.code);
+    } else if (cur.mode === 'skip') {
+      rec = { ...c, ...a, field: false, source: 'curated', note: cur.note };
+    } else {
+      const errs = [];
+      let p;
+      if (cur.mode === 'ok') p = applyPatch(a, cur.lines, errs);
+      else { const r = parseDsl(cur.lines.join('\n')); p = r.puzzle; errs.push(...r.errors); }
+      errs.forEach((e) => problems.push(`${c.code}: ${e}`));
+      rec = { ...c, ...a, stages: p.stages, variables: p.variables, derived: p.derived, final: p.final, checks: p.checks || [], field: true, source: 'curated', note: cur.note };
+      problems.push(...check(c.code, rec));
+    }
+    if (cur) {
+      // Curated tags win; otherwise keep the detector's extras and fix field/home.
+      const extras = (a.tags || []).filter((t) => t !== 'field' && t !== 'home');
+      rec.tags = cur.tags || [rec.field ? 'field' : 'home', ...extras];
+    }
+    if (rec.field) fieldCount++;
+    registry[c.code] = { status: cur ? (rec.field ? 'field' : 'skip') : 'auto', type: c.type, name: c.name, checked: registry[c.code]?.checked || today };
+    out.push(rec);
+  }
+  for (const code of curation.keys()) if (!caches.some((c) => c.code === code)) problems.push(`${code}: in curation.txt but not in any GPX`);
+
+  const file = { format: 'geofieldsolver', version: 1, kind: 'curated', built: new Date().toISOString(), caches: out, seen: caches.map((c) => ({ code: c.code, name: c.name, type: c.type })) };
+  await fetch('/save?path=data/field-caches.json', { method: 'POST', body: JSON.stringify(file) });
+  await fetch('/save?path=data/registry.json', { method: 'POST', body: JSON.stringify(registry, null, 1) });
+  log(`wrote data/field-caches.json: ${out.length} candidates, ${fieldCount} field puzzles`);
+  log(`new GC codes since last build: ${newCodes.length}`);
+  log(`puzzle candidates not yet reviewed by Claude: ${unreviewed.length}${unreviewed.length ? ' — ' + unreviewed.join(' ') : ''}`);
+  log(problems.length ? `PROBLEMS:\n${problems.join('\n')}` : 'no problems');
+  window.__buildResult = { problems, unreviewed, newCodes, fieldCount };
+};
+</script>
+</body>
+</html>

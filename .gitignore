@@ -1,0 +1,5 @@
+# Pocket Queries, the AI review and the generated cache file contain owner-written
+# listings and Pocket Query data — keep them out of the public repository.
+data/
+*.zip
+*.gpx
