@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Solver — fake GPS</title>
+<link rel="stylesheet" href="../docs/css/style.css">
+</head>
+<body>
+<!-- Dev only: runs the real app with a simulated position. Usage: gps-test.html?lat=56.95&lon=24.11 (or ?deny to simulate blocked location) -->
+<main id="main"></main>
+<script>
+  const q = new URLSearchParams(location.search);
+  const coords = { latitude: Number(q.get('lat') || 56.9496), longitude: Number(q.get('lon') || 24.1052), accuracy: 8, speed: 0, heading: null };
+  Object.defineProperty(navigator, 'geolocation', {
+    value: {
+      watchPosition: (ok, fail) => { setTimeout(() => (q.has('deny') ? fail({ code: 1 }) : ok({ coords })), 300); return 1; },
+      clearWatch() {},
+    },
+  });
+</script>
+<script type="module" src="../docs/js/app.js"></script>
+</body>
+</html>

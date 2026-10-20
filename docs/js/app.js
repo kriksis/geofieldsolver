@@ -6,10 +6,11 @@ import { serialize, parseDsl } from './dsl.js';
 import { readFiles, importGpx, importJson, exportBackup, gpxCodes, markDone } from './importer.js';
 import { TAGS } from './detect.js';
 
-const state = { caches: new Map(), user: new Map(), seenCount: 0, pos: null, filter: 'field', q: '' };
+const state = { caches: new Map(), user: new Map(), seenCount: 0, pos: null, gps: 'waiting', filter: 'field', q: '' };
 const main = document.getElementById('main');
 let viewCleanup = null;
-let onPosition = null;
+let onPosition = null; // throttled redraw on GPS updates
+let onPositionNow = null; // immediate redraw for the first fix or a GPS error
 
 // ---------- data ----------
 
@@ -48,10 +49,10 @@ function solve(c, values) {
 // ---------- geolocation ----------
 
 function startGps() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation) { state.gps = 'unsupported'; return; }
   navigator.geolocation.watchPosition(
-    (p) => { state.pos = p.coords; onPosition?.(); },
-    () => {},
+    (p) => { const first = !state.pos; state.pos = p.coords; state.gps = 'ok'; first ? onPositionNow?.() : onPosition?.(); },
+    (e) => { if (!state.pos) { state.gps = e.code === 1 ? 'denied' : 'error'; onPositionNow?.(); } },
     { enableHighAccuracy: true, maximumAge: 5000 },
   );
 }
@@ -64,6 +65,7 @@ function route() {
   viewCleanup?.();
   viewCleanup = null;
   onPosition = null;
+  onPositionNow = null;
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
   window.scrollTo(0, 0);
   if (parts[0] === 'c' && parts[2] === 'edit') return renderEdit(parts[1]);
@@ -99,8 +101,16 @@ function renderList() {
         ${['field', 'progress', 'solved', 'done', 'home', 'all'].map((f) => `<button class="chip ${state.filter === f ? 'on' : ''}" data-filter="${f}">${{ field: 'Field', progress: 'Started', solved: 'Solved', done: 'Done', home: 'Home/PC', all: 'All' }[f]}</button>`).join('')}
       </div>
     </div>
+    <div id="gps-status" class="gps-status"></div>
     <ul id="list" class="list"></ul>`;
   const draw = () => {
+    const byTime = state.filter === 'progress';
+    document.getElementById('gps-status').innerHTML = byTime ? 'Most recently worked on first'
+      : { ok: `Closest first · GPS ±${Math.round(state.pos?.accuracy ?? 0)} m`,
+        waiting: 'Finding your location…',
+        denied: 'Location is blocked — allow it for this site to sort by distance',
+        error: 'No location yet — sorted by name',
+        unsupported: 'No location on this device — sorted by name' }[state.gps];
     const q = state.q.toLowerCase();
     let rows = all.map((c) => ({ c, s: solve(c, userOf(c.code).values) }));
     rows = rows.filter(({ c, s }) => {
@@ -114,10 +124,16 @@ function renderList() {
       if (state.filter === 'home') return tagsOf(c).some((t) => ['home', 'film', 'jigidi', 'online'].includes(t));
       return true;
     });
-    rows.forEach((r) => { r.d = distTo(r.c.lat, r.c.lon); });
-    if (state.filter === 'progress') rows.sort((a, b) => (userOf(b.c.code).updated || 0) - (userOf(a.c.code).updated || 0));
+    // Solved caches: distance to the final, otherwise to the posted coordinates.
+    rows.forEach((r) => {
+      const t = r.s.final?.ok ? r.s.final : r.c;
+      r.d = distTo(t.lat, t.lon);
+      r.dir = r.d != null ? cardinal(bearing(state.pos.latitude, state.pos.longitude, t.lat, t.lon)) : '';
+      r.toFinal = !!r.s.final?.ok;
+    });
+    if (byTime) rows.sort((a, b) => (userOf(b.c.code).updated || 0) - (userOf(a.c.code).updated || 0));
     else rows.sort((a, b) => (a.d ?? 0) - (b.d ?? 0) || a.c.name.localeCompare(b.c.name, 'lv'));
-    document.getElementById('list').innerHTML = rows.length ? rows.map(({ c, s, d }) => `
+    document.getElementById('list').innerHTML = rows.length ? rows.map(({ c, s, d, dir, toFinal }) => `
       <li><a href="#/c/${c.code}" class="row">
         <span class="type t-${typeClass(c.type)}" title="${esc(c.type)}">${typeIcon(c.type)}</span>
         <span class="row-main">
@@ -127,12 +143,13 @@ function renderList() {
         </span>
         <span class="row-side">
           ${userOf(c.code).done ? '<span class="badge ok">done</span>' : s.final?.ok ? '<span class="badge ok">✓</span>' : s.inputs ? `<span class="badge">${s.filled}/${s.inputs}</span>` : ''}
-          <span class="dist">${d != null ? fmtDist(d) : ''}</span>
+          <span class="dist" title="${toFinal ? 'to the final' : 'to the posted coordinates'}">${d != null ? `${toFinal ? '⚑ ' : ''}${fmtDist(d)} ${dir}` : ''}</span>
         </span>
       </a></li>`).join('') : '<li class="empty muted">Nothing here.</li>';
   };
   draw();
   onPosition = throttle(draw, 5000);
+  onPositionNow = draw;
   document.getElementById('q').addEventListener('input', (e) => { state.q = e.target.value; draw(); });
   main.querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', () => { state.filter = b.dataset.filter; renderList(); }));
 }
