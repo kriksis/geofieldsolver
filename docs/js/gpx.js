@@ -17,6 +17,8 @@ export function parseGpx(xmlText) {
   if (doc.getElementsByTagName('parsererror').length) throw new Error('Not a valid GPX file');
   const caches = [];
   const waypoints = [];
+  // The Pocket Query's own name (e.g. "LV 1k") — used to notice caches that drop out of it.
+  const pq = txt(doc.documentElement, 'name');
   for (const w of doc.getElementsByTagNameNS('*', 'wpt')) {
     const lat = Number(w.getAttribute('lat'));
     const lon = Number(w.getAttribute('lon'));
@@ -38,6 +40,7 @@ export function parseGpx(xmlText) {
         url: txt(w, 'url') || `https://coord.info/${code}`,
         descHtml: [descHtml(kid(gc, 'short_description')), descHtml(kid(gc, 'long_description'))].filter(Boolean).join('<hr>'),
         waypoints: [],
+        pq,
       });
     } else {
       waypoints.push({

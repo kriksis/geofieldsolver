@@ -77,6 +77,8 @@ input[type=search], .var-in, textarea {
 .t-multi { background: var(--multi); } .t-mystery { background: var(--mystery); } .t-letterbox { background: var(--letterbox); } .t-wherigo { background: var(--wherigo); }
 .badge { padding: 1px 8px; border-radius: 999px; background: var(--line); color: var(--text); font-weight: 600; }
 .badge.ok { background: var(--accent); color: var(--accent-ink); }
+.badge.warn { background: transparent; border: 1px solid var(--warn); color: var(--warn); font-size: 12px; }
+.banner.warn { border-style: solid; }
 .ai { color: var(--accent); font-weight: 600; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .tag { font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px; background: var(--line); color: var(--text); white-space: nowrap; }
@@ -86,6 +88,8 @@ input[type=search], .var-in, textarea {
 
 .info { display: grid; gap: 4px; margin-bottom: 10px; font-size: 14px; color: var(--muted); }
 .info a { font-weight: 600; }
+.checkers { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; }
+.checkers .mini { color: var(--accent, inherit); }
 .src { font-size: 13px; }
 .src.ai { color: var(--accent); }
 .note { margin: 6px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--text); border-radius: 6px; font-size: 14px; }

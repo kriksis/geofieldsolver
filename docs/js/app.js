@@ -1,7 +1,7 @@
 import * as db from './store.js';
 import { computeEnv, evalCoords, evalTarget, evaluate, formatLatLon, splitLatLon } from './formula.js';
 import { distance, bearing, fmtDist, cardinal, mapLinks } from './geo.js';
-import { escapeHtml as esc, sanitizeHtml } from './text.js';
+import { escapeHtml as esc, sanitizeHtml, checkerLinks } from './text.js';
 import { serialize, parseDsl } from './dsl.js';
 import { readFiles, importGpx, importJson, exportBackup, gpxCodes, markDone } from './importer.js';
 import { TAGS } from './detect.js';
@@ -99,7 +99,7 @@ function renderList() {
     <div class="toolbar">
       <input id="q" type="search" placeholder="Search name or GC code" value="${esc(state.q)}">
       <div class="chips">
-        ${['field', 'progress', 'solved', 'done', 'home', 'all'].map((f) => `<button class="chip ${state.filter === f ? 'on' : ''}" data-filter="${f}">${{ field: 'Field', progress: 'Started', solved: 'Solved', done: 'Done', home: 'Home/PC', all: 'All' }[f]}</button>`).join('')}
+        ${['field', 'progress', 'solved', 'done', 'home', 'gone', 'all'].map((f) => `<button class="chip ${state.filter === f ? 'on' : ''}" data-filter="${f}">${{ field: 'Field', progress: 'Started', solved: 'Solved', done: 'Done', home: 'Home/PC', gone: 'Gone?', all: 'All' }[f]}</button>`).join('')}
       </div>
     </div>
     <div id="gps-status" class="gps-status"></div>
@@ -119,6 +119,9 @@ function renderList() {
       const done = !!userOf(c.code).done;
       if (state.filter === 'done') return done;
       if (done && state.filter !== 'all') return false;
+      // Archived, disabled or no longer in your Pocket Query: only under Gone?, Started and All.
+      if (state.filter === 'gone') return !!goneOf(c);
+      if (goneOf(c) && ['field', 'solved', 'home'].includes(state.filter)) return false;
       if (state.filter === 'field') return c.field;
       if (state.filter === 'progress') return s.filled > 0 && !s.final?.ok;
       if (state.filter === 'solved') return !!s.final?.ok;
@@ -139,7 +142,7 @@ function renderList() {
         <span class="type t-${typeClass(c.type)}" title="${esc(c.type)}">${typeIcon(c.type)}</span>
         <span class="row-main">
           <span class="row-title">${esc(c.name)}</span>
-          <span class="row-sub">${c.code} · D${c.difficulty ?? '?'}/T${c.terrain ?? '?'}${c.source === 'curated' ? ' · <span class="ai">AI</span>' : ''}</span>
+          <span class="row-sub">${c.code} · D${c.difficulty ?? '?'}/T${c.terrain ?? '?'}${c.source === 'curated' ? ' · <span class="ai">AI</span>' : ''}${goneOf(c) ? ` · <span class="badge warn">${goneOf(c)}</span>` : ''}</span>
           <span class="tags">${tagChips(c)}</span>
         </span>
         <span class="row-side">
@@ -156,6 +159,12 @@ function renderList() {
 }
 
 const tagsOf = (c) => c.tags || [c.field ? 'field' : 'home'];
+// Your PQ lists only active caches you haven't found, so one that drops out of it was
+// archived or found by you.
+const goneOf = (c) => (c.archived ? 'archived' : c.available === false ? 'disabled' : c.missingSince ? 'not in PQ' : '');
+const goneNote = (c) => (c.archived ? 'This cache is archived.'
+  : c.available === false ? 'This cache is temporarily disabled.'
+  : c.missingSince ? `Not in your Pocket Query imported ${new Date(c.missingSince).toLocaleDateString('lv-LV')} — it has been archived or you have already found it. Check on geocaching.com.` : '');
 const tagChips = (c) => tagsOf(c).map((t) => `<span class="tag tag-${esc(t)}">${esc(TAGS[t] || t)}</span>`).join('');
 
 const typeClass = (t) => (/Multi/.test(t) ? 'multi' : /Unknown/.test(t) ? 'mystery' : /Letterbox/.test(t) ? 'letterbox' : /Wherigo/.test(t) ? 'wherigo' : 'other');
@@ -184,14 +193,18 @@ function renderCache(code) {
       <input id="v-${esc(v.name)}" class="var-in" data-var="${esc(v.name)}" inputmode="decimal" autocomplete="off" value="${esc(u.values[v.name] ?? '')}" placeholder="?">
     </div>`;
   const loose = vars.filter((v) => v.stage == null || !stages[v.stage]);
+  const checkers = checkerLinks(c.descHtml);
+  const checkerBtn = checkers.length ? `<a class="icon-btn" href="${esc(checkers[0].url)}" target="_blank" rel="noopener noreferrer" aria-label="Open checker" title="Checker: ${esc(checkers[0].host)}">✓</a>` : '';
 
-  main.innerHTML = `${topbar(esc(c.name), '#/', `<a class="icon-btn" href="#/c/${code}/edit" aria-label="Edit puzzle">✎</a>`)}
+  main.innerHTML = `${topbar(esc(c.name), '#/', `${checkerBtn}<a class="icon-btn" href="#/c/${code}/edit" aria-label="Edit puzzle">✎</a>`)}
     <section class="info">
       <div><a href="https://coord.info/${c.code}" target="_blank" rel="noopener">${c.code}</a> · ${esc(c.type)} · D${c.difficulty ?? '?'}/T${c.terrain ?? '?'} · ${esc(c.container || '')}</div>
+      ${checkers.length ? `<div class="checkers">${checkers.map((k) => `<a class="mini" href="${esc(k.url)}" target="_blank" rel="noopener noreferrer">✓ Checker · ${esc(k.host)}</a>`).join('')}</div>` : ''}
       <div class="tags">${tagChips(c)}</div>
       <div class="posted">Posted: ${formatLatLon(c.lat, c.lon)} <span class="dist" data-dist="posted"></span>
         <a class="mini" href="#/nav/${code}/posted">Go</a></div>
       ${c.source === 'curated' ? '<div class="src ai">Checked by AI</div>' : c.field ? '<div class="src">Auto-detected — check against the description</div>' : ''}
+      ${goneOf(c) ? `<div class="banner warn">${esc(goneNote(c))}</div>` : ''}
       ${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}
       ${!c.field ? `<div class="banner">Not detected as a field puzzle. <button class="btn small" id="mark-field">Mark as field puzzle</button></div>` : ''}
     </section>
@@ -488,6 +501,7 @@ function renderImport() {
       } else if (gpx.length) {
         const s = await importGpx(gpx, { recheck: document.getElementById('recheck').checked });
         log(`GPX: ${s.total} caches — <b>${s.added} new</b>, ${s.known} already known (skipped)${s.rechecked ? `, ${s.rechecked} re-checked` : ''}. ${s.candidates} puzzle candidates, <b>${s.field} field puzzles</b>.`);
+        if (s.missing || s.back) log(`<b>${s.missing}</b> stored caches in this PQ's area are no longer in it (archived or found by you) — see the <a href="#/">Gone?</a> filter.${s.back ? ` ${s.back} are back in the PQ.` : ''}`);
       }
       await load();
       log('<a href="#/">Open the list ›</a>');

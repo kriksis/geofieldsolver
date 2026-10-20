@@ -4,7 +4,7 @@
     {
       "name": "field-solver",
       "runtimeExecutable": "powershell",
-      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "D:/Kristaps/Make/GeoFieldSolver/tools/serve.ps1", "-Port", "8765"],
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/kkrav/Documents/Kristaps/Make/GeoFieldSolver/tools/serve.ps1", "-Port", "8765"],
       "port": 8765
     }
   ]

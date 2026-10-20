@@ -6,7 +6,7 @@ import { parseGpxFiles } from './gpx.js';
 import { analyze, CANDIDATE_TYPES } from './detect.js';
 import * as db from './store.js';
 
-const BASIC = ['name', 'type', 'difficulty', 'terrain', 'container', 'owner', 'hint', 'archived', 'available', 'lat', 'lon', 'url', 'descHtml', 'waypoints'];
+const BASIC = ['name', 'type', 'difficulty', 'terrain', 'container', 'owner', 'hint', 'archived', 'available', 'lat', 'lon', 'url', 'descHtml', 'waypoints', 'pq'];
 
 export async function readFiles(files) {
   const gpx = [];
@@ -36,14 +36,34 @@ export async function markDone(codes) {
   return { marked: list.length, inDatabase: list.filter((c) => known.has(c)).length };
 }
 
+// A Pocket Query lists only active caches you haven't found, so a cache that is archived
+// or found since the last run simply disappears from it. Every cache remembers the PQ it
+// last came in (`pq`, the GPX's own name such as "LV 1k"); when that PQ is imported again
+// without it, the cache gets `missingSince`. A cache that moves to another PQ clears the
+// flag as soon as that PQ is imported.
 export async function importGpx(texts, { recheck = false } = {}) {
   const caches = parseGpxFiles(texts);
   const seen = new Map((await db.getAll('seen')).map((s) => [s.code, s]));
   const existing = new Map((await db.getAll('caches')).map((c) => [c.code, c]));
-  const stats = { total: caches.length, added: 0, known: 0, rechecked: 0, candidates: 0, field: 0 };
+  const stats = { total: caches.length, added: 0, known: 0, rechecked: 0, candidates: 0, field: 0, missing: 0, back: 0, archived: 0 };
   const putCaches = [];
   const putSeen = [];
   const now = new Date().toISOString();
+  const inFile = new Set(caches.map((c) => c.code));
+  const pqs = new Set(caches.map((c) => c.pq).filter(Boolean));
+  // Status refresh for caches we already have: PQ, archived/disabled flags, back in a PQ.
+  for (const c of caches) {
+    const old = existing.get(c.code);
+    if (!old || (seen.has(c.code) && recheck)) continue;
+    if (old.missingSince) stats.back++;
+    if (c.archived || !c.available) stats.archived++;
+    putCaches.push({ ...old, pq: c.pq, archived: c.archived, available: c.available, missingSince: null, lastSeen: now });
+  }
+  for (const old of existing.values()) {
+    if (inFile.has(old.code) || old.missingSince || !pqs.has(old.pq)) continue;
+    putCaches.push({ ...old, missingSince: now });
+    stats.missing++;
+  }
   for (const c of caches) {
     const known = seen.get(c.code);
     if (known && !recheck) { stats.known++; continue; }
@@ -58,6 +78,8 @@ export async function importGpx(texts, { recheck = false } = {}) {
       } else {
         rec = { ...c, ...analyze(c) };
       }
+      rec.missingSince = null;
+      rec.lastSeen = now;
       if (rec.field) stats.field++;
       putCaches.push(rec);
     }
@@ -81,7 +103,8 @@ export async function importJson(obj) {
     if (old?.edited && !backup) { stats.keptEdited++; continue; }
     old ? stats.updated++ : stats.added++;
     if (rec.field) stats.field++;
-    putCaches.push(rec);
+    // A curated file doesn't know which caches your latest PQ dropped — keep that flag.
+    putCaches.push(old && !backup ? { ...rec, missingSince: old.missingSince ?? null, lastSeen: old.lastSeen } : rec);
   }
   const now = new Date().toISOString();
   const putSeen = (obj.seen || []).map((s) => (typeof s === 'string' ? { code: s } : s))

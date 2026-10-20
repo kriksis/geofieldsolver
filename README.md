@@ -8,6 +8,11 @@ you type, so a half-finished multi can be continued another day.
 - Import a Pocket Query (`.zip` or `.gpx`) — field puzzles are detected automatically
   (tuned for Latvian listings) — or import `field-caches.json` prepared by Claude.
 - Every imported GC code is remembered; later imports add only new caches.
+- Weekly PQs: each cache remembers which PQ it came in (by the PQ's name, e.g. "LV 1k").
+  When that PQ is imported again without it, the cache is marked "not in PQ" (archived or
+  found by you) and moves to the **Gone?** filter; archived/disabled flags are refreshed too.
+- A checker link (geocheck, certitude, geochecker …) from the listing is shown at the top of
+  each cache (✓ in the title bar).
 - Stages with distance, Go/compass view, Google/Apple Maps links.
 - Checksums from the listing (✓/✗), projections (bearing + distance), Cyrillic and
   multi-letter variable names, digit-split values (`(A+B)*463 = STVXYZ`).
